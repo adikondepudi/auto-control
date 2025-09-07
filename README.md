@@ -58,9 +58,15 @@ python main.cli.py destroy \
   --aws-region "us-east-1"
 ```
 
-### Destroy Infrastructure
-*   Typer (for the CLI)
-*   GitPython (for cloning repositories)
-*   Boto3 (AWS SDK)
-*   Docker SDK for Python
-*   All other dependencies are part of the standard Python library.
+## Toolkit & Dependencies
+
+### Core Libraries
+
+This tool was built on a few key libraries. The full list is in `requirements.txt`.
+*   **Typer:** For the CLI.
+*   **GitPython:** For cloning repos.
+*   **Boto3:** AWS SDK.
+*   **Docker SDK:** For building/pushing images.
+
+### Methodology
+LLM was used for assistance. Helped with boilerplate code and routine debugging issues.
