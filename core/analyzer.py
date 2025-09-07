@@ -1,3 +1,5 @@
+# FILE: core/analyzer.py
+
 import os
 import tempfile
 import git
@@ -41,6 +43,9 @@ class RepoAnalyzer:
         Private helper to detect the framework and ensure core dependencies exist.
         """
         for root, _, files in os.walk(path):
+            if '.git' in root:
+                continue
+                
             for file in files:
                 if file.endswith('.py'):
                     try:
@@ -48,39 +53,62 @@ class RepoAnalyzer:
                             if "from flask import Flask" in f.read():
                                 log.info(f"Found Flask import in '{file}'. Identifying as Flask project.")
                                 
-                                # --- THE WINNING LOGIC IS HERE ---
-                                requirements_path = os.path.join(path, 'requirements.txt')
-                                if not os.path.exists(requirements_path):
-                                    log.warning("No 'requirements.txt' file found. A new one will be created with core dependencies.")
-                                    # Create an empty file to be appended to.
-                                    open(requirements_path, 'w').close()
+                                # --- THE FIX: ROBUST requirements.txt DISCOVERY & CONSOLIDATION ---
+                                found_requirements_path = None
+                                # Search the entire repo for a requirements.txt file
+                                for r_root, _, r_files in os.walk(path):
+                                    if '.git' in r_root:
+                                        continue
+                                    if 'requirements.txt' in r_files:
+                                        found_requirements_path = os.path.join(r_root, 'requirements.txt')
+                                        log.info(f"Discovered 'requirements.txt' at: {os.path.relpath(found_requirements_path, path)}")
+                                        break # Use the first one we find
 
-                                # Now, read the file and ensure core dependencies are present.
-                                with open(requirements_path, 'r+') as req_file:
+                                root_requirements_path = os.path.join(path, 'requirements.txt')
+
+                                if found_requirements_path:
+                                    # If a requirements file was found but isn't in the root,
+                                    # copy its content to the root to standardize the build process.
+                                    if found_requirements_path != root_requirements_path:
+                                        log.info(f"Consolidating '{os.path.relpath(found_requirements_path, path)}' to the repository root for containerization.")
+                                        with open(found_requirements_path, 'r') as source_file, open(root_requirements_path, 'w') as dest_file:
+                                            dest_file.write(source_file.read())
+                                else:
+                                    log.warning("No 'requirements.txt' file found anywhere in the repository. A new one will be created.")
+                                    open(root_requirements_path, 'w').close()
+
+                                # Now, operate *only* on the root_requirements_path. This standardizes the input for the Docker build.
+                                with open(root_requirements_path, 'r+') as req_file:
                                     content = req_file.read().lower()
                                     dependencies_to_add = []
-                                    
-                                    # Check for Flask
                                     if 'flask' not in content:
                                         dependencies_to_add.append('Flask')
-                                    # Check for Gunicorn
                                     if 'gunicorn' not in content:
                                         dependencies_to_add.append('gunicorn')
 
                                     if dependencies_to_add:
                                         log.info(f"Injecting missing core dependencies into requirements.txt: {', '.join(dependencies_to_add)}")
-                                        # Go to the end of the file to append
                                         req_file.seek(0, os.SEEK_END)
-                                        # Add a newline if the file is not empty
                                         if req_file.tell() > 0:
                                             req_file.write('\n')
                                         req_file.write('\n'.join(dependencies_to_add))
                                 
-                                entrypoint_module = os.path.splitext(file)[0]
+                                # --- INTELLIGENT ENTRYPOINT DETECTION (FROM PREVIOUS FIX) ---
+                                module_name = os.path.splitext(file)[0]
+                                relative_dir = os.path.relpath(root, path)
+                                if relative_dir == '.':
+                                    full_module_path = module_name
+                                else:
+                                    python_path = relative_dir.replace(os.sep, '.')
+                                    full_module_path = f"{python_path}.{module_name}"
+                                
+                                entrypoint = f"{full_module_path}:app"
+                                log.info(f"Determined application entrypoint: {entrypoint}")
+
                                 return {
                                     'framework': 'flask',
                                     'language': 'python',
-                                    'entrypoint_file': f"{entrypoint_module}:app",
+                                    'entrypoint_file': entrypoint,
                                 }
                     except Exception as e:
                         log.warning(f"Could not read or process file {file}: {e}")
