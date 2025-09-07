@@ -8,24 +8,24 @@ app = typer.Typer()
 @app.command()
 def deploy(
     repo_url: str = typer.Option(..., "--repo-url", help="The GitHub repository URL to deploy."),
-    prompt: str = typer.Option(..., "--prompt", help="The natural language prompt describing the deployment target.")
+    prompt: str = typer.Option(..., "--prompt", help="The natural language prompt describing the deployment target."),
+    ecr_repo_name: str = typer.Option(..., "--ecr-repo-name", help="The name of the AWS ECR repository to push the image to."),
+    aws_region: str = typer.Option("us-east-2", "--aws-region", help="The AWS region to deploy the infrastructure in.")
 ):
     """
-    Analyzes, containerizes, and deploys a code repository to AWS.
+    Analyzes, builds, pushes, and deploys a code repository to AWS App Runner.
     """
     log.info("Autodeployment Chat System initialized.")
     
-    # NLP "Hack": A simple keyword check for the MVP
     prompt_lower = prompt.lower()
     if 'flask' not in prompt_lower or 'aws' not in prompt_lower:
         log.error("Deployment target not supported.")
         print("Error: This tool currently only supports deploying Flask applications to AWS.")
-        print("Please ensure your prompt includes the words 'Flask' and 'AWS'.")
         raise typer.Exit(code=1)
         
     try:
         orchestrator = Orchestrator()
-        orchestrator.run_deployment(repo_url, prompt)
+        orchestrator.run_deployment(repo_url, prompt, ecr_repo_name, aws_region)
     except AutoDeployerException as e:
         log.error(f"A critical error occurred during deployment: {e}")
         print(f"\nDeployment Failed: {e}")
@@ -38,6 +38,8 @@ def deploy(
 @app.command()
 def destroy(
     repo_url: str = typer.Option(..., "--repo-url", help="The GitHub repository URL that was deployed."),
+    ecr_repo_name: str = typer.Option(..., "--ecr-repo-name", help="The name of the AWS ECR repository used for the deployment."),
+    aws_region: str = typer.Option("us-east-2", "--aws-region", help="The AWS region where the infrastructure was deployed.")
 ):
     """
     Destroys the AWS infrastructure associated with a repository.
@@ -46,7 +48,7 @@ def destroy(
     
     try:
         orchestrator = Orchestrator()
-        orchestrator.run_destroy(repo_url)
+        orchestrator.run_destroy(repo_url, ecr_repo_name, aws_region)
     except AutoDeployerException as e:
         log.error(f"A critical error occurred during destroy: {e}")
         print(f"\nDestroy Failed: {e}")

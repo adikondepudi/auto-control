@@ -13,3 +13,21 @@ class ContainerizationError(AutoDeployerException):
 class TerraformError(AutoDeployerException):
     """Raised when a Terraform command fails."""
     pass
+
+# --- New Exceptions for Phase 2 ---
+
+class DockerError(AutoDeployerException):
+    """Base exception for Docker-related operations."""
+    pass
+
+class ECRAuthError(DockerError):
+    """Raised when authentication with AWS ECR fails."""
+    pass
+
+class DockerBuildError(DockerError):
+    """Raised when the 'docker build' command fails."""
+    pass
+
+class DockerPushError(DockerError):
+    """Raised when the 'docker push' command fails."""
+    pass
