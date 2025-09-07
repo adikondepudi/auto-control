@@ -1,0 +1,11 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+
+infrastructure/__pycache__/
+infrastructure/templates/aws_app_runner/.terraform/
+infrastructure/templates/aws_app_runner/.terraform.lock.hcl
