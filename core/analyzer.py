@@ -1,6 +1,7 @@
 # FILE: core/analyzer.py
 
 import os
+import re # Import the regular expression module
 import tempfile
 import git
 from utils import exceptions
@@ -38,9 +39,47 @@ class RepoAnalyzer:
         log.info(f"Cleaning up temporary directory: {self.temp_dir.name}")
         self.temp_dir.cleanup()
 
+    def _patch_hardcoded_urls(self, repo_path: str):
+        """
+        Scans frontend files for hardcoded localhost URLs and replaces them
+        with relative paths to ensure portability after deployment.
+        """
+        log.info("Scanning for hardcoded localhost URLs to patch...")
+        # Regex to find http://localhost or http://127.0.0.1 with an optional port
+        url_pattern = re.compile(r"https?://(localhost|127\.0\.0\.1)(:\d+)?")
+        
+        patched_files_count = 0
+        for root, _, files in os.walk(repo_path):
+            if '.git' in root:
+                continue
+            
+            for file_name in files:
+                if file_name.endswith(('.js', '.html', '.htm')):
+                    file_path = os.path.join(root, file_name)
+                    try:
+                        with open(file_path, 'r+', encoding='utf-8', errors='ignore') as f:
+                            content = f.read()
+                            # Replace matched URLs with an empty string, making the path relative
+                            new_content, substitutions_made = url_pattern.subn('', content)
+                            
+                            if substitutions_made > 0:
+                                log.info(f"Patched {substitutions_made} hardcoded URL(s) in '{os.path.relpath(file_path, repo_path)}'.")
+                                # Rewrite the file with the patched content
+                                f.seek(0)
+                                f.truncate()
+                                f.write(new_content)
+                                patched_files_count += 1
+                    except Exception as e:
+                        log.warning(f"Could not read or patch file {file_path}: {e}")
+        
+        if patched_files_count > 0:
+            log.info(f"URL patching complete. Total files patched: {patched_files_count}.")
+        else:
+            log.info("No hardcoded localhost URLs found to patch.")
+
     def _detect_framework(self, path: str) -> dict:
         """
-        Private helper to detect the framework and ensure core dependencies exist.
+        Private helper to detect the framework, handle dependencies, and patch code.
         """
         for root, _, files in os.walk(path):
             if '.git' in root:
@@ -53,57 +92,46 @@ class RepoAnalyzer:
                             if "from flask import Flask" in f.read():
                                 log.info(f"Found Flask import in '{file}'. Identifying as Flask project.")
                                 
-                                # --- THE FIX: ROBUST requirements.txt DISCOVERY & CONSOLIDATION ---
+                                # --- ROBUST requirements.txt DISCOVERY & CONSOLIDATION ---
                                 found_requirements_path = None
-                                # Search the entire repo for a requirements.txt file
                                 for r_root, _, r_files in os.walk(path):
-                                    if '.git' in r_root:
-                                        continue
+                                    if '.git' in r_root: continue
                                     if 'requirements.txt' in r_files:
                                         found_requirements_path = os.path.join(r_root, 'requirements.txt')
                                         log.info(f"Discovered 'requirements.txt' at: {os.path.relpath(found_requirements_path, path)}")
-                                        break # Use the first one we find
-
+                                        break
+                                
                                 root_requirements_path = os.path.join(path, 'requirements.txt')
 
                                 if found_requirements_path:
-                                    # If a requirements file was found but isn't in the root,
-                                    # copy its content to the root to standardize the build process.
                                     if found_requirements_path != root_requirements_path:
-                                        log.info(f"Consolidating '{os.path.relpath(found_requirements_path, path)}' to the repository root for containerization.")
-                                        with open(found_requirements_path, 'r') as source_file, open(root_requirements_path, 'w') as dest_file:
-                                            dest_file.write(source_file.read())
+                                        log.info(f"Consolidating '{os.path.relpath(found_requirements_path, path)}' to the repository root.")
+                                        with open(found_requirements_path, 'r') as source, open(root_requirements_path, 'w') as dest:
+                                            dest.write(source.read())
                                 else:
-                                    log.warning("No 'requirements.txt' file found anywhere in the repository. A new one will be created.")
+                                    log.warning("No 'requirements.txt' file found. A new one will be created.")
                                     open(root_requirements_path, 'w').close()
 
-                                # Now, operate *only* on the root_requirements_path. This standardizes the input for the Docker build.
                                 with open(root_requirements_path, 'r+') as req_file:
                                     content = req_file.read().lower()
-                                    dependencies_to_add = []
-                                    if 'flask' not in content:
-                                        dependencies_to_add.append('Flask')
-                                    if 'gunicorn' not in content:
-                                        dependencies_to_add.append('gunicorn')
-
-                                    if dependencies_to_add:
-                                        log.info(f"Injecting missing core dependencies into requirements.txt: {', '.join(dependencies_to_add)}")
+                                    deps_to_add = []
+                                    if 'flask' not in content: deps_to_add.append('Flask')
+                                    if 'gunicorn' not in content: deps_to_add.append('gunicorn')
+                                    if deps_to_add:
+                                        log.info(f"Injecting missing core dependencies: {', '.join(deps_to_add)}")
                                         req_file.seek(0, os.SEEK_END)
-                                        if req_file.tell() > 0:
-                                            req_file.write('\n')
-                                        req_file.write('\n'.join(dependencies_to_add))
+                                        if req_file.tell() > 0: req_file.write('\n')
+                                        req_file.write('\n'.join(deps_to_add))
                                 
-                                # --- INTELLIGENT ENTRYPOINT DETECTION (FROM PREVIOUS FIX) ---
+                                # --- INTELLIGENT ENTRYPOINT DETECTION ---
                                 module_name = os.path.splitext(file)[0]
                                 relative_dir = os.path.relpath(root, path)
-                                if relative_dir == '.':
-                                    full_module_path = module_name
-                                else:
-                                    python_path = relative_dir.replace(os.sep, '.')
-                                    full_module_path = f"{python_path}.{module_name}"
-                                
+                                full_module_path = module_name if relative_dir == '.' else f"{relative_dir.replace(os.sep, '.')}.{module_name}"
                                 entrypoint = f"{full_module_path}:app"
                                 log.info(f"Determined application entrypoint: {entrypoint}")
+                                
+                                # --- NEW FINAL STEP: Patch hardcoded URLs in frontend files ---
+                                self._patch_hardcoded_urls(path)
 
                                 return {
                                     'framework': 'flask',
